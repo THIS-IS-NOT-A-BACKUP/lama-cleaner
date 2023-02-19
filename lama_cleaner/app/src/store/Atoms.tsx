@@ -41,12 +41,14 @@ interface AppState {
   disableShortCuts: boolean
   isInpainting: boolean
   isDisableModelSwitch: boolean
+  isEnableAutoSaving: boolean
   isInteractiveSeg: boolean
   isInteractiveSegRunning: boolean
   interactiveSegClicks: number[][]
   showFileManager: boolean
   enableFileManager: boolean
   gifImage: HTMLImageElement | undefined
+  brushSize: number
 }
 
 export const appState = atom<AppState>({
@@ -58,12 +60,14 @@ export const appState = atom<AppState>({
     disableShortCuts: false,
     isInpainting: false,
     isDisableModelSwitch: false,
+    isEnableAutoSaving: false,
     isInteractiveSeg: false,
     isInteractiveSegRunning: false,
     interactiveSegClicks: [],
     showFileManager: false,
     enableFileManager: false,
     gifImage: undefined,
+    brushSize: 40,
   },
 })
 
@@ -86,6 +90,18 @@ export const isInpaintingState = selector({
   set: ({ get, set }, newValue: any) => {
     const app = get(appState)
     set(appState, { ...app, isInpainting: newValue })
+  },
+})
+
+export const brushSizeState = selector({
+  key: 'brushSizeState',
+  get: ({ get }) => {
+    const app = get(appState)
+    return app.brushSize
+  },
+  set: ({ get, set }, newValue: any) => {
+    const app = get(appState)
+    set(appState, { ...app, brushSize: newValue })
   },
 })
 
@@ -218,6 +234,18 @@ export const isDisableModelSwitchState = selector({
   set: ({ get, set }, newValue: any) => {
     const app = get(appState)
     set(appState, { ...app, isDisableModelSwitch: newValue })
+  },
+})
+
+export const isEnableAutoSavingState = selector({
+  key: 'isEnableAutoSavingState',
+  get: ({ get }) => {
+    const app = get(appState)
+    return app.isEnableAutoSaving
+  },
+  set: ({ get, set }, newValue: any) => {
+    const app = get(appState)
+    set(appState, { ...app, isEnableAutoSaving: newValue })
   },
 })
 
@@ -355,7 +383,7 @@ const defaultHDSettings: ModelsHDSettings = {
   [AIModel.LAMA]: {
     hdStrategy: HDStrategy.CROP,
     hdStrategyResizeLimit: 2048,
-    hdStrategyCropTrigerSize: 1280,
+    hdStrategyCropTrigerSize: 800,
     hdStrategyCropMargin: 196,
     enabled: true,
   },
@@ -468,7 +496,7 @@ export const settingStateDefault: Settings = {
   sdGuidanceScale: 7.5,
   sdSampler: SDSampler.pndm,
   sdSeed: 42,
-  sdSeedFixed: true,
+  sdSeedFixed: false,
   sdNumSamples: 1,
   sdMatchHistograms: false,
   sdScale: 100,

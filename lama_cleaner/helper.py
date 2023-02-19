@@ -8,8 +8,18 @@ import cv2
 from PIL import Image, ImageOps
 import numpy as np
 import torch
+from lama_cleaner.const import MPS_SUPPORT_MODELS
 from loguru import logger
 from torch.hub import download_url_to_file, get_dir
+
+
+def switch_mps_device(model_name, device):
+    if model_name not in MPS_SUPPORT_MODELS and (
+        device == "mps" or device == torch.device("mps")
+    ):
+        logger.info(f"{model_name} not support mps, switch to cpu")
+        return torch.device("cpu")
+    return device
 
 
 def get_cache_path_by_url(url):
@@ -38,17 +48,20 @@ def ceil_modulo(x, mod):
     return (x // mod + 1) * mod
 
 
-def load_jit_model(url_or_path, device):
+def \
+        load_jit_model(url_or_path, device):
     if os.path.exists(url_or_path):
         model_path = url_or_path
     else:
         model_path = download_model(url_or_path)
-    logger.info(f"Load model from: {model_path}")
+    logger.info(f"Loading model from: {model_path}")
     try:
-        model = torch.jit.load(model_path).to(device)
-    except:
+        model = torch.jit.load(model_path, map_location="cpu").to(device)
+    except Exception as e:
         logger.error(
-            f"Failed to load {model_path}, delete model and restart lama-cleaner"
+            f"Failed to load {model_path}, please delete model and restart lama-cleaner.\n"
+            f"If you still have errors, please try download model manually first https://lama-cleaner-docs.vercel.app/install/download_model_manually.\n"
+            f"If all above operations doesn't work, please submit an issue at https://github.com/Sanster/lama-cleaner/issues and include a screenshot of the error:\n{e}"
         )
         exit(-1)
     model.eval()
