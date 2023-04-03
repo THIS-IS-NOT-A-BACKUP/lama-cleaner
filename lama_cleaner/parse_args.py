@@ -104,6 +104,11 @@ def parse_args():
         type=str,
         choices=RealESRGANModelNameList,
     )
+    parser.add_argument(
+        "--realesrgan-no-half",
+        action="store_true",
+        help="Disable half precision for RealESRGAN",
+    )
     parser.add_argument("--enable-gfpgan", action="store_true", help=GFPGAN_HELP)
     parser.add_argument(
         "--gfpgan-device", default="cpu", type=str, choices=GFPGAN_AVAILABLE_DEVICES
@@ -161,8 +166,6 @@ def parse_args():
         exit()
 
     if args.load_installer_config:
-        from lama_cleaner.web_config import load_config
-
         if args.installer_config and not os.path.exists(args.installer_config):
             parser.error(f"args.installer_config={args.installer_config} not exists")
 
