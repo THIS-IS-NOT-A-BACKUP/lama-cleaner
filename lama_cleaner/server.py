@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import hashlib
 import os
+import hashlib
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
@@ -29,6 +29,7 @@ from lama_cleaner.plugins import (
     MakeGIF,
     GFPGANPlugin,
     RestoreFormerPlugin,
+    AnimeSeg,
 )
 from lama_cleaner.schema import Config
 
@@ -49,6 +50,7 @@ from flask import (
     send_from_directory,
     jsonify,
 )
+from flask_socketio import SocketIO
 
 # Disable ability for Flask to display warning about using a development server in a production environment.
 # https://gist.github.com/jerblack/735b9953ba1ab6234abb43174210d356
@@ -80,7 +82,15 @@ BUILD_DIR = os.environ.get("LAMA_CLEANER_BUILD_DIR", "app/build")
 
 class NoFlaskwebgui(logging.Filter):
     def filter(self, record):
-        return "flaskwebgui-keep-server-alive" not in record.getMessage()
+        msg = record.getMessage()
+        if "Running on http:" in msg:
+            print(msg[msg.index("Running on http:") :])
+
+        return (
+            "flaskwebgui-keep-server-alive" not in msg
+            and "socket.io" not in msg
+            and "This is a development server." not in msg
+        )
 
 
 logging.getLogger("werkzeug").addFilter(NoFlaskwebgui())
@@ -89,6 +99,10 @@ app = Flask(__name__, static_folder=os.path.join(BUILD_DIR, "static"))
 app.config["JSON_AS_ASCII"] = False
 CORS(app, expose_headers=["Content-Disposition"])
 
+sio_logger = logging.getLogger("sio-logger")
+sio_logger.setLevel(logging.ERROR)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
 model: ModelManager = None
 thumb: FileManager = None
 output_dir: str = None
@@ -96,6 +110,7 @@ device = None
 input_image_path: str = None
 is_disable_model_switch: bool = False
 is_controlnet: bool = False
+controlnet_method: str = "control_v11p_sd15_canny"
 is_enable_file_manager: bool = False
 is_enable_auto_saving: bool = False
 is_desktop: bool = False
@@ -111,8 +126,7 @@ def get_image_ext(img_bytes):
 
 
 def diffuser_callback(i, t, latents):
-    pass
-    # socketio.emit('diffusion_step', {'diffusion_step': step})
+    socketio.emit("diffusion_progress", {"step": i})
 
 
 @app.route("/save_image", methods=["POST"])
@@ -123,14 +137,18 @@ def save_image():
     input = request.files
     filename = request.form["filename"]
     origin_image_bytes = input["image"].read()  # RGB
-    image, _ = load_img(origin_image_bytes)
-    if image.shape[2] == 3:
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    elif image.shape[2] == 4:
-        image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGRA)
-
+    ext = get_image_ext(origin_image_bytes)
+    image, _, exif_infos = load_img(origin_image_bytes, return_exif=True)
     save_path = os.path.join(output_dir, filename)
-    cv2.imencode(Path(save_path).suffix, image)[1].tofile(save_path)
+
+    img_bytes = pil_to_bytes(
+        Image.fromarray(image),
+        ext,
+        quality=image_quality,
+        exif_infos=exif_infos,
+    )
+    with open(save_path, "wb") as fw:
+        fw.write(img_bytes)
 
     return "ok", 200
 
@@ -186,7 +204,7 @@ def process():
     input = request.files
     # RGB
     origin_image_bytes = input["image"].read()
-    image, alpha_channel, exif = load_img(origin_image_bytes, return_exif=True)
+    image, alpha_channel, exif_infos = load_img(origin_image_bytes, return_exif=True)
 
     mask, _ = load_img(input["mask"].read(), gray=True)
     mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)[1]
@@ -246,6 +264,7 @@ def process():
         p2p_image_guidance_scale=form["p2pImageGuidanceScale"],
         p2p_guidance_scale=form["p2pGuidanceScale"],
         controlnet_conditioning_scale=form["controlnet_conditioning_scale"],
+        controlnet_method=form["controlnet_method"],
     )
 
     if config.sd_seed == -1:
@@ -255,7 +274,6 @@ def process():
 
     logger.info(f"Origin image shape: {original_shape}")
     image = resize_max_size(image, size_limit=size_limit, interpolation=interpolation)
-    logger.info(f"Resized image shape: {image.shape}")
 
     mask = resize_max_size(mask, size_limit=size_limit, interpolation=interpolation)
 
@@ -269,7 +287,7 @@ def process():
             return "CUDA out of memory", 500
         else:
             logger.exception(e)
-            return "Internal Server Error", 500
+            return f"{str(e)}", 500
     finally:
         logger.info(f"process time: {(time.time() - start) * 1000}ms")
         torch.cuda.empty_cache()
@@ -286,12 +304,14 @@ def process():
 
     ext = get_image_ext(origin_image_bytes)
 
-    # fmt: off
-    if exif is not None:
-        bytes_io = io.BytesIO(pil_to_bytes(Image.fromarray(res_np_img), ext, quality=image_quality, exif=exif))
-    else:
-        bytes_io = io.BytesIO(pil_to_bytes(Image.fromarray(res_np_img), ext, quality=image_quality))
-    # fmt: on
+    bytes_io = io.BytesIO(
+        pil_to_bytes(
+            Image.fromarray(res_np_img),
+            ext,
+            quality=image_quality,
+            exif_infos=exif_infos,
+        )
+    )
 
     response = make_response(
         send_file(
@@ -301,6 +321,8 @@ def process():
         )
     )
     response.headers["X-Seed"] = str(config.sd_seed)
+
+    socketio.emit("diffusion_finish")
     return response
 
 
@@ -313,7 +335,9 @@ def run_plugin():
         return "Plugin not found", 500
 
     origin_image_bytes = files["image"].read()  # RGB
-    rgb_np_img, alpha_channel, exif = load_img(origin_image_bytes, return_exif=True)
+    rgb_np_img, alpha_channel, exif_infos = load_img(
+        origin_image_bytes, return_exif=True
+    )
 
     start = time.time()
     try:
@@ -349,8 +373,8 @@ def run_plugin():
             )
         )
 
-    if name == RemoveBG.name:
-        rgb_res = cv2.cvtColor(bgr_res, cv2.COLOR_BGRA2RGBA)
+    if name in [RemoveBG.name, AnimeSeg.name]:
+        rgb_res = bgr_res
         ext = "png"
     else:
         rgb_res = cv2.cvtColor(bgr_res, cv2.COLOR_BGR2RGB)
@@ -368,7 +392,10 @@ def run_plugin():
         send_file(
             io.BytesIO(
                 pil_to_bytes(
-                    Image.fromarray(rgb_res), ext, quality=image_quality, exif=exif
+                    Image.fromarray(rgb_res),
+                    ext,
+                    quality=image_quality,
+                    exif_infos=exif_infos,
                 )
             ),
             mimetype=f"image/{ext}",
@@ -381,6 +408,7 @@ def run_plugin():
 def get_server_config():
     return {
         "isControlNet": is_controlnet,
+        "controlNetMethod": controlnet_method,
         "isDisableModelSwitchState": is_disable_model_switch,
         "isEnableAutoSaving": is_enable_auto_saving,
         "enableFileManager": is_enable_file_manager,
@@ -432,7 +460,7 @@ def set_input_photo():
         return send_file(
             input_image_path,
             as_attachment=True,
-            attachment_filename=Path(input_image_path).name,
+            download_name=Path(input_image_path).name,
             mimetype=f"image/{get_image_ext(image_in_bytes)}",
         )
     else:
@@ -446,9 +474,15 @@ def build_plugins(args):
         plugins[InteractiveSeg.name] = InteractiveSeg(
             args.interactive_seg_model, args.interactive_seg_device
         )
+
     if args.enable_remove_bg:
         logger.info(f"Initialize {RemoveBG.name} plugin")
         plugins[RemoveBG.name] = RemoveBG()
+
+    if args.enable_anime_seg:
+        logger.info(f"Initialize {AnimeSeg.name} plugin")
+        plugins[AnimeSeg.name] = AnimeSeg()
+
     if args.enable_realesrgan:
         logger.info(
             f"Initialize {RealESRGANUpscaler.name} plugin: {args.realesrgan_model}, {args.realesrgan_device}"
@@ -458,6 +492,7 @@ def build_plugins(args):
             args.realesrgan_device,
             no_half=args.realesrgan_no_half,
         )
+
     if args.enable_gfpgan:
         logger.info(f"Initialize {GFPGANPlugin.name} plugin")
         if args.enable_realesrgan:
@@ -469,12 +504,14 @@ def build_plugins(args):
         plugins[GFPGANPlugin.name] = GFPGANPlugin(
             args.gfpgan_device, upscaler=plugins.get(RealESRGANUpscaler.name, None)
         )
+
     if args.enable_restoreformer:
         logger.info(f"Initialize {RestoreFormerPlugin.name} plugin")
         plugins[RestoreFormerPlugin.name] = RestoreFormerPlugin(
             args.restoreformer_device,
             upscaler=plugins.get(RealESRGANUpscaler.name, None),
         )
+
     if args.enable_gif:
         logger.info(f"Initialize GIF plugin")
         plugins[MakeGIF.name] = MakeGIF()
@@ -491,6 +528,7 @@ def main(args):
     global output_dir
     global is_enable_auto_saving
     global is_controlnet
+    global controlnet_method
     global image_quality
 
     build_plugins(args)
@@ -499,6 +537,7 @@ def main(args):
 
     if args.sd_controlnet and args.model in SD15_MODELS:
         is_controlnet = True
+        controlnet_method = args.sd_controlnet_method
 
     output_dir = args.output_dir
     if output_dir:
@@ -537,6 +576,7 @@ def main(args):
     model = ModelManager(
         name=args.model,
         sd_controlnet=args.sd_controlnet,
+        sd_controlnet_method=args.sd_controlnet_method,
         device=device,
         no_half=args.no_half,
         hf_access_token=args.hf_access_token,
@@ -556,6 +596,7 @@ def main(args):
 
         ui = FlaskUI(
             app,
+            socketio=socketio,
             width=app_width,
             height=app_height,
             host=args.host,
@@ -564,4 +605,10 @@ def main(args):
         )
         ui.run()
     else:
-        app.run(host=args.host, port=args.port, debug=args.debug)
+        socketio.run(
+            app,
+            host=args.host,
+            port=args.port,
+            debug=args.debug,
+            allow_unsafe_werkzeug=True,
+        )

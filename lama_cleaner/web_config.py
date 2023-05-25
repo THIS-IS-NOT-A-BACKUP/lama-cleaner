@@ -16,6 +16,7 @@ def save_config(
     model,
     sd_local_model_path,
     sd_controlnet,
+    sd_controlnet_method,
     device,
     gui,
     no_gui_auto_close,
@@ -33,6 +34,7 @@ def save_config(
     interactive_seg_model,
     interactive_seg_device,
     enable_remove_bg,
+    enable_anime_seg,
     enable_realesrgan,
     realesrgan_device,
     realesrgan_model,
@@ -135,6 +137,10 @@ def main(config_file: str):
                     enable_remove_bg = gr.Checkbox(
                         init_config.enable_remove_bg, label=REMOVE_BG_HELP
                     )
+                with gr.Row():
+                    enable_anime_seg = gr.Checkbox(
+                        init_config.enable_anime_seg, label=ANIMESEG_HELP
+                    )
 
                 with gr.Row():
                     enable_realesrgan = gr.Checkbox(
@@ -177,6 +183,11 @@ def main(config_file: str):
                 sd_controlnet = gr.Checkbox(
                     init_config.sd_controlnet, label=f"{SD_CONTROLNET_HELP}"
                 )
+                sd_controlnet_method = gr.Radio(
+                    SD_CONTROLNET_CHOICES,
+                    lable="ControlNet method",
+                    value=init_config.sd_controlnet_method,
+                )
                 no_half = gr.Checkbox(init_config.no_half, label=f"{NO_HALF_HELP}")
                 cpu_offload = gr.Checkbox(
                     init_config.cpu_offload, label=f"{CPU_OFFLOAD_HELP}"
@@ -202,6 +213,7 @@ def main(config_file: str):
                 model,
                 sd_local_model_path,
                 sd_controlnet,
+                sd_controlnet_method,
                 device,
                 gui,
                 no_gui_auto_close,
@@ -219,6 +231,7 @@ def main(config_file: str):
                 interactive_seg_model,
                 interactive_seg_device,
                 enable_remove_bg,
+                enable_anime_seg,
                 enable_realesrgan,
                 realesrgan_device,
                 realesrgan_model,

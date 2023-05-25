@@ -53,8 +53,15 @@ Run Stable Diffusion text encoder model on CPU to save GPU memory.
 """
 
 SD_CONTROLNET_HELP = """
-Run Stable Diffusion 1.5 inpainting model with Canny ControlNet control.
+Run Stable Diffusion inpainting model with ControlNet. You can switch control method in webui.
 """
+DEFAULT_CONTROLNET_METHOD = "control_v11p_sd15_canny"
+SD_CONTROLNET_CHOICES = [
+    "control_v11p_sd15_canny",
+    "control_v11p_sd15_openpose",
+    "control_v11p_sd15_inpaint",
+    "control_v11f1p_sd15_depth"
+]
 
 SD_LOCAL_MODEL_HELP = """
 Load Stable Diffusion 1.5 model(ckpt/safetensors) from local path.
@@ -110,6 +117,7 @@ INTERACTIVE_SEG_MODEL_HELP = "Model size: vit_b < vit_l < vit_h. Bigger model si
 AVAILABLE_INTERACTIVE_SEG_MODELS = ["vit_b", "vit_l", "vit_h"]
 AVAILABLE_INTERACTIVE_SEG_DEVICES = ["cuda", "cpu", "mps"]
 REMOVE_BG_HELP = "Enable remove background. Always run on CPU"
+ANIMESEG_HELP = "Enable anime segmentation. Always run on CPU"
 REALESRGAN_HELP = "Enable realesrgan super resolution"
 REALESRGAN_AVAILABLE_DEVICES = ["cpu", "cuda", "mps"]
 GFPGAN_HELP = (
@@ -127,6 +135,7 @@ class Config(BaseModel):
     model: str = DEFAULT_MODEL
     sd_local_model_path: str = None
     sd_controlnet: bool = False
+    sd_controlnet_method: str = DEFAULT_CONTROLNET_METHOD
     device: str = DEFAULT_DEVICE
     gui: bool = False
     no_gui_auto_close: bool = False
@@ -144,6 +153,7 @@ class Config(BaseModel):
     interactive_seg_model: str = "vit_l"
     interactive_seg_device: str = "cpu"
     enable_remove_bg: bool = False
+    enable_anime_seg: bool = False
     enable_realesrgan: bool = False
     realesrgan_device: str = "cpu"
     realesrgan_model: str = RealESRGANModelName.realesr_general_x4v3.value
